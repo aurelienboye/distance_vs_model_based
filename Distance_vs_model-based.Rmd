@@ -1,0 +1,437 @@
+---
+title: "Comparison distance-based versus model-based approach"
+author: "Aurélien Boyé"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  rmdformats::readthedown:
+    use_bookdown: TRUE
+    number_sections : FALSE
+    fig_caption: TRUE
+    code_folding: "hide"
+    highlight: "tango"
+    lightbox: TRUE
+    gallery: TRUE
+    thumbnails: FALSE # if TRUE display content images as thumbnails
+    toc_depth: 6
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE, cache = TRUE, fig.cap = "\\s")
+```
+
+# Packages {.tabset}
+
+## Data handling
+
+```{r}
+library(tidyverse)
+
+# Plot
+library(ggrepel)
+library(patchwork)
+library(ggboral) # devtools::install_github("mbedward/ggboral")
+```
+
+
+## Analysis
+
+```{r}
+
+# Distance-based
+#---------------
+
+library(vegan)
+#library(adespatial)
+
+# JSDM
+#------
+
+library(mvabund)
+library(boral)
+
+```
+
+## Custom functions
+
+```{r}
+
+#--------------------------------------------------
+# Plot ordinations from rda(), cca(), or cmdscale()
+#--------------------------------------------------
+
+plot_ord <- function(ord,comm, reverse_axis2 = FALSE){
+  
+  site_scores <- scores(ord, display = "sites") %>%
+    as.data.frame() %>%
+    set_names("Axis1", "Axis2")
+  
+  if(reverse_axis2){
+    site_scores$Axis2 <- -site_scores$Axis2 
+  }
+  
+  if(any(class(ord) %in% c("rda","cca"))){
+    
+   sp_scores <- scores(ord, display = "sp") %>%
+     as.data.frame() %>%
+    set_names("Axis1", "Axis2")
+    
+  }else{# PCoA
+    
+    sp_scores <- wascores(site_scores, comm) %>%
+      as.data.frame()
+  }
+ 
+  ggplot() +
+    geom_point(data = site_scores, aes(x = Axis1, y = Axis2)) +
+    geom_path(data = site_scores, aes(x = Axis1, y = Axis2)) +
+    geom_text_repel(data = site_scores, aes(x = Axis1, y = Axis2, label = rownames(site_scores)), nudge_y = -0.1) +
+    geom_segment(data = sp_scores, aes(x = 0, y = 0, xend = Axis1, yend = Axis2), col = "grey") +
+    geom_text_repel(data = sp_scores, aes(x = Axis1, y = Axis2, label = rownames(sp_scores)), col = "grey") +
+    coord_fixed(ratio = 1) +
+    theme_minimal()
+   
+}
+
+
+#--------------------------------------------------
+# Plot ordinations from boral
+#--------------------------------------------------
+
+plot_boral <- function(boral_mod){
+  
+  # Retrieve data to do the same plots as before
+  ord_data <- gg_lvsplot(boral_mod) %>%
+    layer_data(., 2) %>%
+    select(x, y, label) %>%
+    mutate(group = if_else(str_detect(label, "sp"), "species", "sites"))
+  
+   ggplot() +
+    geom_point(data = ord_data %>% filter(group == "sites"), aes(x = x, y = y)) +
+    geom_path(data = ord_data %>% filter(group == "sites"), aes(x = x, y = y)) +
+    geom_text_repel(data = ord_data %>% filter(group == "sites"), aes(x = x, y = y, label = label), nudge_y = -0.1) +
+    geom_segment(data = ord_data %>% filter(group == "species"), aes(x = 0, y = 0, xend = x, yend = y), col = "grey") +
+    geom_text_repel(data = ord_data %>% filter(group == "species"), aes(x = x, y = y, label = label), col = "grey") +
+    coord_fixed(ratio = 1) +
+    theme_minimal() +
+     xlab("Latent variable 1") +
+     ylab("Latent variable 2")
+   
+}
+
+```
+
+
+---
+
+# Legendre et Gallagher 2001
+
+## Create data of Fig. 3a
+
+
+```{r}
+
+fig3a_data <- data.frame(
+  site = seq(1:19),
+  sp1 = c(7,4,2,1, rep(0,15)),
+  sp2 = c(1,2,4,7,8,7,4,2,1, rep(0,10)),
+  sp3 = c(rep(0,5),1,2,4,7,8,7,4,2,1,rep(0,5)),
+  sp4 = c(rep(0,10),1,2,4,7,8,7,4,2,1),
+  sp5 = c(rep(0,15), 1,2,4,7),
+  sp6 = c(0,1,1,rep(0,16)),
+  sp7 = c(rep(0,6),2,1,rep(0,11)),
+  sp8 = c(rep(0,11),3,1,rep(0,6)),
+  sp9 = c(rep(0,16), 4,1,0)
+)
+
+pos <- position_dodge(0.3)
+
+fig3a_data %>%
+  gather(species, abundance, -site) %>%
+  ggplot(data= ., aes(x = site, y = abundance, fill = species, shape = species, group = species)) +
+  geom_line(aes(col = species), position = pos, alpha = 0.6) +
+  geom_point(data = . %>% filter(abundance != 0), alpha=0.6, size = 2.5, position = pos) +
+  scale_shape_manual(values=rep(c(21:25),4)) +
+  scale_x_continuous(breaks = seq(1:19)) +
+  theme_linedraw()
+
+fig3a_data <- fig3a_data %>%
+  column_to_rownames("site")
+```
+
+## Reproduce Fig. 4
+
+
+> Using decostand :
+>
+> - profile transformation: Y.tr = decostand(Y, "total")
+> - chord transformation: Y.tr = decostand(Y, "norm")
+> - log-chord transformation: Y.tr = decostand(log1p(Y), "norm")
+> - Hellinger transformation: Y.tr = decostand(Y, "hellinger")
+> - chi-square transformation: Y.tr = decostand(Y, "chi.sq")
+>
+> > [dist.ldc](https://rdrr.io/cran/adespatial/man/dist.ldc.html) can also be used
+
+```{r}
+
+comm <- fig3a_data
+
+# Figure 4a : PCA on raw data
+#-----------------------------
+
+ord <- rda(comm)
+fig_4a <- plot_ord(ord, comm) +
+  ggtitle("PCA on raw data")
+
+# Figure 4b : CA on raw data
+#---------------------------
+
+ord <- cca(comm)
+fig_4b <- plot_ord(ord, comm) +
+  ggtitle("CA on raw data")
+
+# Figure 4c : PCA on chi2-transformed data
+#-----------------------------------------
+
+comm_tr <- decostand(comm,"chi.sq")
+ord <- rda(comm_tr)
+fig_4c <- plot_ord(ord, comm) +
+  ggtitle("PCA on chi2-transformed data")
+
+# Figure 4d : PCA on chord-transformed data
+#------------------------------------------
+
+comm_tr <- decostand(comm,"norm")
+ord <- rda(comm_tr)
+fig_4d <- plot_ord(ord, comm) +
+  ggtitle("PCA on chord-transformed data")
+
+# Figure 4e : PCA on species-profiles transformed data
+#-----------------------------------------------------
+
+comm_tr <- decostand(comm,"total")
+ord <- rda(comm_tr)
+fig_4e <- plot_ord(ord, comm) +
+  ggtitle("PCA on species-profiles transformed data")
+
+# Figure 4f : PCA on Hellinger transformed data
+#---------------------------------------------
+
+comm_tr <- decostand(comm,"hellinger")
+ord <- rda(comm_tr)
+fig_4f <- plot_ord(ord, comm) +
+  ggtitle("PCA on Hellinger-transformed data")
+
+# Figure 4g : PCoA with bray-curtis distance
+#---------------------------------------------
+
+comm_d <- vegdist(comm, "bray")
+ord <- cmdscale(comm_d)
+fig_4g <- plot_ord(ord, comm, reverse_axis2 = TRUE) +
+  ggtitle("PCoA with Bray-curtis")
+
+```
+
+```{r, fig.width = 15, fig.height = 15}
+(fig_4a + fig_4b + fig_4c) / 
+  (fig_4d + fig_4e + fig_4f) / 
+  (fig_4g + plot_spacer() + plot_spacer()) +
+  plot_annotation(tag_levels = 'a', tag_prefix="(", tag_suffix = ")")
+```
+
+> - Add variance explained to axes labels
+> - Do log-chord
+
+## Comparison of Fig. 4 with JSDM
+
+### Comparison with boral
+
+#### Normal
+
+```{r, results = 'hide'}
+# Normal - without row effects
+#----------------------------
+
+boral_normal <- boral(y = comm, family = "normal", lv.control = list(num.lv = 2), row.eff = "none")
+
+boral_p1 <- plot_boral(boral_normal)+
+  scale_y_reverse() +
+  scale_x_reverse() +
+  ggtitle("Normal - without row effects")
+
+# Normal - fixed row effects
+#----------------------------
+
+boral_normal_fixed <- boral(y = comm, family = "normal", lv.control = list(num.lv = 2), row.eff = "fixed")
+
+boral_p2 <- plot_boral(boral_normal_fixed)+
+  scale_y_reverse() +
+  ggtitle("Normal - fixed row effects")
+
+# Normal - random row effects
+#----------------------------
+
+boral_normal_rand <- boral(y = comm, family = "normal", lv.control = list(num.lv = 2), row.eff = "random")
+
+boral_p3 <- plot_boral(boral_normal_rand)+
+  scale_y_reverse() +
+  scale_x_reverse() +
+  ggtitle("Normal - random row effects")
+
+# Hellinger - Normal - without row effects
+#----------------------------
+comm_tr <- decostand(comm,"hellinger")
+
+boral_normal_hell <- boral(y = comm_tr, family = "normal", lv.control = list(num.lv = 2), row.eff = "none")
+
+boral_p4 <- plot_boral(boral_normal_hell)+
+  scale_y_reverse() +
+  scale_x_reverse() +
+  ggtitle("Hellinger-transformed - Normal - without row effects")
+
+# Normal - fixed row effects
+#----------------------------
+
+boral_normal_hell_fixed <- boral(y = comm_tr, family = "normal", lv.control = list(num.lv = 2), row.eff = "fixed")
+
+boral_p5 <- plot_boral(boral_normal_hell_fixed)+
+  scale_y_reverse() +
+  ggtitle("Hellinger-transformed - Normal - fixed row effects")
+
+# normal - random row effects
+#----------------------------
+
+boral_normal_hell_rand <- boral(y = comm_tr, family = "normal", lv.control = list(num.lv = 2), row.eff = "random")
+
+boral_p6 <- plot_boral(boral_normal_hell_rand)+
+  scale_y_reverse() +
+  scale_x_reverse() +
+  ggtitle("Hellinger-transformed - Normal - random row effects")
+
+```
+
+```{r, fig.width = 8, fig.height = 12}
+(boral_p1 + boral_p4) / (boral_p2 + boral_p5) / (boral_p3 + boral_p6) +
+  plot_annotation(tag_levels = 'a', tag_prefix="(", tag_suffix = ")")
+```
+
+```{r}
+(boral_p1 + boral_p2 + boral_p3)+
+  plot_annotation(tag_levels = 'a', tag_prefix="(", tag_suffix = ")")
+```
+
+
+```{r, eval = FALSE, include = FALSE, fig.width = 15, fig.height = 8}
+(boral_p1 + boral_p2 + boral_p3) / (boral_p4 + boral_p5 + boral_p6) +
+  plot_annotation(tag_levels = 'a', tag_prefix="(", tag_suffix = ")")
+```
+
+#### Poisson & Negative binomial
+
+```{r, results = 'hide'}
+
+# Poisson - without row effects
+#----------------------------
+
+boral_poisson <- boral(y = comm, family = "poisson", lv.control = list(num.lv = 2), row.eff = "none")
+
+boral_p1 <- plot_boral(boral_poisson)+
+  scale_y_reverse() +
+  scale_x_reverse() +
+  ggtitle("Poisson - without row effects")
+
+# Poisson - fixed row effects
+#----------------------------
+
+boral_poisson_fixed <- boral(y = comm, family = "poisson", lv.control = list(num.lv = 2), row.eff = "fixed")
+
+boral_p2 <- plot_boral(boral_poisson_fixed)+
+  scale_y_reverse() +
+  ggtitle("Poisson - fixed row effects")
+
+# Poisson - random row effects
+#----------------------------
+
+boral_poisson_rand <- boral(y = comm, family = "poisson", lv.control = list(num.lv = 2), row.eff = "random")
+
+boral_p3 <- plot_boral(boral_poisson_rand)+
+  scale_y_reverse() +
+  scale_x_reverse() +
+  ggtitle("Poisson - random row effects")
+
+# Negative binomial - without row effects
+#--------------------------------------
+
+boral_negbin <- boral(y = comm, family = "negative.binomial", lv.control = list(num.lv = 2), row.eff = "none")
+
+boral_p4 <- plot_boral(boral_negbin) +
+  scale_y_reverse() +
+  ggtitle("Negative binomial - without row effects")
+
+# Negative binomial - fixed row effects
+#--------------------------------------
+
+boral_negbin_fixed <- boral(y = comm, family = "negative.binomial", lv.control = list(num.lv = 2), row.eff = "fixed")
+
+boral_p5 <- plot_boral(boral_negbin_fixed) +
+  scale_y_reverse() +
+  ggtitle("Negative binomial - fixed row effects")
+
+# Negative binomial - random row effects
+#--------------------------------------
+
+boral_negbin_rand<- boral(y = comm, family = "negative.binomial", lv.control = list(num.lv = 2), row.eff = "random")
+
+boral_p6 <- plot_boral(boral_negbin_rand) +
+  scale_y_reverse() +
+  ggtitle("Negative binomial - random row effects")
+
+```
+
+```{r, fig.width = 8, fig.height = 12}
+(boral_p1 + boral_p4) / (boral_p2 + boral_p5) / (boral_p3 + boral_p6) +
+  plot_annotation(tag_levels = 'a', tag_prefix="(", tag_suffix = ")")
+```
+
+#### Residuals of the models
+
+- **Normal - without row effects**
+
+```{r}
+plot(boral_normal, ask = F, mfrow = c(2,2))
+```
+
+- **Poisson - without row effects**
+
+```{r}
+plot(boral_poisson, ask = F, mfrow = c(2,2))
+```
+
+- **Negative binomial - without row effects**
+
+```{r}
+plot(boral_negbin, ask = F, mfrow = c(2,2))
+```
+
+### Comparison with mvabund
+
+```{r}
+
+meanvar.plot(comm)
+
+```
+
+## Comparison with Ecocopula ?
+
+https://cran.r-project.org/web/packages/ecoCopula/vignettes/the_basics.html
+
+---
+
+# Session info
+
+```{r session_info}
+
+sessionInfo()
+
+```
